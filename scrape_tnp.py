@@ -1,6 +1,8 @@
 import logging
 import httpx
 import os
+import schedule
+import time
 
 from dotenv import load_dotenv
 from lxml import html
@@ -50,6 +52,7 @@ def extract_details() -> Generator[str, None, None]:
         client.get(LOGIN_GET_URL)
         logger.info("POST %s", LOGIN_POST_URL)
         client.post(LOGIN_POST_URL, data=PAYLOAD, follow_redirects=True)
+        time.sleep(1)
 
         logger.info("GET %s", JOBS_URL)
         jobs_page = client.get(JOBS_URL)
@@ -63,8 +66,22 @@ def extract_details() -> Generator[str, None, None]:
                    f"Posted Date:{posted_date.text}")
         logger.info("GET %s", LOGOUT_URL)
         client.get(LOGOUT_URL)
+        time.sleep(1)
         logger.info("BYE BYE!!")
 
 
+def main():
+    try:
+        send_notification(extract_details())
+    except Exception:
+        logger.exception("Something went wrong.")
+
+
 if __name__ == "__main__":
-    send_notification(extract_details())
+    schedule.every(2).hours.do(main).run()
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(5)
+        except KeyboardInterrupt:
+            break
