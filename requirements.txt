@@ -1,6 +1,5 @@
 httpx
 lxml
-schedule
 python-dotenv
 python-telegram-bot
 python-telegram-bot[job-queue]

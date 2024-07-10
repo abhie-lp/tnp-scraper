@@ -33,7 +33,7 @@ async def create_table():
 """)
 
 
-async def insert(title: str, end_date: str, posted_date: str) -> int:
+async def insert_job(title: str, end_date: str, posted_date: str) -> int:
     logger.info("Insert %s %s %s", title, end_date, posted_date)
     async with database_connection() as db:
         result: tuple[int] = await db.execute_insert(
