@@ -1,9 +1,9 @@
 import asyncio
-import datetime as dt
 import os
 import sqlite3
 import aiosqlite
 
+from collections import namedtuple
 from dotenv import load_dotenv
 
 from logger import logger
@@ -11,9 +11,17 @@ load_dotenv()
 
 DB_NAME = os.environ["DB_NAME"]
 
+JobDetailShort = namedtuple("JobDetailShort", ("id", "title", "end_date"))
+JobDetailFull = namedtuple("JobDetailFull",
+                           ("id", "title", "end_date", "posted_date"))
+
 
 def database_connection() -> aiosqlite.Connection:
     return aiosqlite.connect(DB_NAME, detect_types=sqlite3.PARSE_DECLTYPES)
+
+
+def job_short_detail_factory(cursor, row):
+    return JobDetailShort(*row)
 
 
 async def create_table():
@@ -47,37 +55,55 @@ async def insert_job(title: str, end_date: str, posted_date: str) -> int:
             logger.exception("Something went wrong while inserting")
 
 
-async def fetch_one(_id: int) -> tuple[int, str, dt.date, dt.date]:
+async def fetch_one(_id: int) -> JobDetailFull:
     logger.info("Get details for id-%d", _id)
     async with database_connection() as db:
         async with db.execute(
             "SELECT id, title, end_date, posted_date FROM jobs "
             f"WHERE id={_id} LIMIT 1;"
         ) as cursor:
-            return await cursor.fetchone()
+            return JobDetailFull(*await cursor.fetchone())
 
 
-async def fetch_active_jobs() -> list[tuple[int, str, dt.date]]:
+async def fetch_all_jobs(only_interested=False, only_applied=False,
+                         only_skip=False) -> list[JobDetailShort]:
+    async with database_connection() as db:
+        db.row_factory = job_short_detail_factory
+        stmt = "SELECT id, title, end_date FROM jobs"
+        if only_interested:
+            logger.info("Get all interested jobs")
+            stmt += " WHERE interested=TRUE"
+        elif only_applied:
+            logger.info("Get all applied jobs")
+            stmt += " WHERE applied=TRUE"
+        elif only_skip:
+            logger.info("Get all skipped jobs")
+            stmt += " WHERE skip=TRUE"
+        stmt += " LIMIT 20;"
+        return await db.execute_fetchall(stmt)
+
+
+async def fetch_active_jobs() -> list[JobDetailShort]:
     logger.info("Get active jobs")
     async with database_connection() as db:
-        result: list[tuple[int, str, dt.date]] = await db.execute_fetchall(
+        # Convert the rows to list[namedtuple] instead of list[tuple]
+        db.row_factory = job_short_detail_factory
+        return await db.execute_fetchall(
             "SELECT id, title, end_date FROM jobs "
-            "WHERE skip=FALSE AND applied=FALSE AND interested=TRUE"
-            " AND end_date >= DATE('now', 'localtime');"
+            "WHERE skip=FALSE AND applied=FALSE "
+            "AND end_date >= DATE('now', 'localtime');"
         )
-        return result
 
 
-async def fetch_near_deadline_jobs() -> list[tuple[int, str, dt.date]]:
+async def fetch_near_deadline_jobs() -> list[JobDetailShort]:
     logger.info("Get jobs that are near end date")
     async with database_connection() as db:
-        result: list[tuple[int, str, dt.date]] = await db.execute_fetchall(
+        return await db.execute_fetchall(
             "SELECT id, title, end_date FROM jobs "
-            "WHERE skip=FALSE AND applied=FALSE AND interested=TRUE AND "
+            "WHERE skip=FALSE AND applied=FALSE AND "
             "end_date >= DATE('now', 'localtime') AND "
             "(JULIANDAY(end_date) - JULIANDAY('now', 'localtime')) < 2"
         )
-        return result
 
 
 async def update_field_to_true(_id: int, field: str) -> None:
