@@ -3,11 +3,12 @@ import httpx
 import os
 
 from collections import namedtuple
+
 from dotenv import load_dotenv
 from lxml import html
 from typing import Generator
 
-from database import job_exists, insert_job
+from database import job_exists, insert_job, JobDetailFull
 from logger import logger
 
 load_dotenv()
@@ -28,14 +29,18 @@ PAYLOAD = {"identity": os.environ["USERNAME"],
            "submit": "Login", "txtcentrenm": ""}
 CHAT_ID, API_KEY = os.environ["CHAT_ID"], os.environ["TOKEN"]
 
-Job = namedtuple("Job", ("title", "end_date", "posted_date"))
+Job = namedtuple("Job", ("title", "uid", "end_date", "posted_date"))
 
 
-async def save_new_jobs() -> None:
-    logger.info("Get and save new jobs")
+async def get_and_save_new_jobs() -> list[JobDetailFull]:
+    logger.info("Get and save/update new jobs")
+    new_jobs = []
     async for job in extract_job_details():
-        if not await job_exists(job.title, job.end_date, job.posted_date):
-            await insert_job(job.title, job.end_date, job.posted_date)
+        if not await job_exists(job.uid):
+            new_jobs.append(await insert_job(
+                job.title, job.uid, job.end_date, job.posted_date
+            ))
+    return new_jobs
 
 
 async def extract_job_details() -> Generator[Job, None, None]:
@@ -53,11 +58,12 @@ async def extract_job_details() -> Generator[Job, None, None]:
         html_root = html.fromstring(jobs_page.text)
         jobs_tbody_ele = html_root.find(".//table[@id='job-listings']/tbody")
         for i, job in enumerate(jobs_tbody_ele.findall(".//tr"), start=1):
-            title, end_date, posted_date, *_ = job.findall(".//td")
-            # Reformat dates as YYYY-MM-DD
-            end_date = "-".join(end_date.text.strip().split("/")[::-1])
-            posted_date = "-".join(posted_date.text.strip().split("/")[::-1])
-            yield Job(title.text.strip(), end_date, posted_date)
+            title_ele, end_date_ele, posted_date_ele, dates_ele = job.findall(".//td")
+            # Date given as DD/MM/YYYY, reformat as YYYY-MM-DD
+            end_date = "-".join(end_date_ele.text.strip().split("/")[::-1])
+            posted_date = "-".join(posted_date_ele.text.strip().split("/")[::-1])
+            uid = dates_ele.find(".//a").get("href").rsplit("/", 1)[1]
+            yield Job(title_ele.text.strip(), uid, end_date, posted_date)
         logger.info("Done extraction")
 
         await asyncio.sleep(2)
@@ -67,4 +73,4 @@ async def extract_job_details() -> Generator[Job, None, None]:
 
 
 if __name__ == "__main__":
-    asyncio.run(save_new_jobs())
+    asyncio.run(get_and_save_new_jobs())
