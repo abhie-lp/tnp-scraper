@@ -11,122 +11,155 @@ load_dotenv()
 
 DB_NAME = os.environ["DB_NAME"]
 
-JobDetailShort = namedtuple("JobDetailShort", ("id", "title", "end_date"))
-JobDetailFull = namedtuple("JobDetailFull",
-                           ("id", "title", "end_date", "posted_date"))
+JobDetailShort = namedtuple("JobDetailShort", ("id", "title"))
+JobDetailFull = namedtuple("JobDetailFull", ("id", "title", "end_date", "posted_date",
+                                             "interested", "applied", "skip"))
 
 
 def database_connection() -> aiosqlite.Connection:
     return aiosqlite.connect(DB_NAME, detect_types=sqlite3.PARSE_DECLTYPES)
 
 
-def job_short_detail_factory(cursor, row):
+def job_short_detail_factory(_, row):
     return JobDetailShort(*row)
+
+
+def job_full_detail_factory(_, row):
+    if len(row) == len(JobDetailFull._fields):
+        return JobDetailFull(*row)
+    else:
+        return JobDetailFull(*row, False, False, False)
 
 
 async def create_table():
     logger.info("Creating table if not exist")
     async with database_connection() as db:
-        await db.execute("""CREATE TABLE IF NOT EXISTS jobs(
-  id INTEGER NOT NULL PRIMARY KEY,
-  title VARCHAR(255) NOT NULL,
-  end_date DATE,                    -- YYYY-MM-DD
-  posted_date DATE,                 -- YYYY-MM-DD
-  interested BOOLEAN DEFAULT FALSE,
-  applied BOOLEAN DEFAULT FALSE,
-  skip BOOLEAN DEFAULT FALSE,
-  applied_on DATETIME,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-""")
+        with open("./schema.sql") as fr:
+            await db.executescript(fr.read())
 
 
-async def insert_job(title: str, end_date: str, posted_date: str) -> int:
+async def insert_job(title: str, uid: str, end_date: str, posted_date: str) -> JobDetailFull:
     logger.info("Insert %s %s %s", title, end_date, posted_date)
     async with database_connection() as db:
         result: tuple[int] = await db.execute_insert(
-            "INSERT INTO jobs(title, end_date, posted_date) VALUES "
-            f"('{title}', DATE('{end_date}'), DATE('{posted_date}'));"
+            "INSERT INTO job(title, uid, end_date, posted_date) VALUES "
+            f"('{title}', '{uid}', DATE('{end_date}'), DATE('{posted_date}'));"
         )
         try:
             await db.commit()
-            return result[0]
+            return JobDetailFull(result[0], title, end_date, posted_date,
+                                 False, False, False)
         except aiosqlite.Error:
             logger.exception("Something went wrong while inserting")
 
 
-async def fetch_one(_id: int) -> JobDetailFull:
-    logger.info("Get details for id-%d", _id)
+async def fetch_one(student_id: int, job_id: int) -> JobDetailFull:
+    logger.info("Get details for id-%d", job_id)
     async with database_connection() as db:
-        async with db.execute(
-            "SELECT id, title, end_date, posted_date FROM jobs "
-            f"WHERE id={_id} LIMIT 1;"
-        ) as cursor:
-            return JobDetailFull(*await cursor.fetchone())
+        db.row_factory = job_full_detail_factory
+        if await job_status_exists(student_id, job_id):
+            async with db.execute(
+                "SELECT JOB.id, JOB.title, JOB.end_date, JOB.posted_date, "
+                "JS.interested, JS.applied, JS.skip "
+                f"FROM job JOIN job_status JS ON JS.job_id={job_id} "
+                f"WHERE JS.student_id={student_id};"
+            ) as cursor:
+                return await cursor.fetchone()
+        else:
+            async with db.execute(
+                "SELECT id, title, end_date, posted_date FROM job "
+                f"WHERE id={job_id}"
+            ) as cursor:
+                return await cursor.fetchone()
 
 
-async def fetch_all_jobs(only_interested=False, only_applied=False,
-                         only_skip=False) -> list[JobDetailShort]:
+async def fetch_all_jobs(
+    student_id: int, only_interested=False, only_applied=False, only_skip=False
+) -> list[JobDetailShort]:
+    stmt = ("SELECT JOB.id, JOB.title FROM job JOB "
+            "JOIN job_status JS ON JS.job_id = JOB.id "
+            f" WHERE JS.student_id={student_id} ")
+    condition2 = ""
+    if only_interested:
+        logger.info("Get all interested jobs for %d", student_id)
+        condition2 = " AND JS.interested=TRUE"
+    elif only_applied:
+        logger.info("Get all applied jobs for %d", student_id)
+        condition2 = " AND JS.applied=TRUE"
+    elif only_skip:
+        logger.info("Get all skipped jobs for %d", student_id)
+        condition2 = " AND JS.skip=TRUE"
+    stmt = stmt + condition2 + " ORDER BY JOB.posted_date DESC LIMIT 20;"
     async with database_connection() as db:
         db.row_factory = job_short_detail_factory
-        stmt = "SELECT id, title, end_date FROM jobs"
-        if only_interested:
-            logger.info("Get all interested jobs")
-            stmt += " WHERE interested=TRUE"
-        elif only_applied:
-            logger.info("Get all applied jobs")
-            stmt += " WHERE applied=TRUE"
-        elif only_skip:
-            logger.info("Get all skipped jobs")
-            stmt += " WHERE skip=TRUE"
-        stmt += " LIMIT 20;"
         return await db.execute_fetchall(stmt)
 
 
-async def fetch_active_jobs() -> list[JobDetailShort]:
-    logger.info("Get active jobs")
+async def fetch_active_jobs(
+    student_id: int, near_end_date: bool = False
+) -> list[JobDetailShort]:
+    stmt = ("SELECT JOB.id, JOB.title FROM job JOB "
+            "LEFT JOIN job_status JS ON "
+            f"(JS.job_id = JOB.id AND JS.student_id={student_id}) "
+            "WHERE ((JS.skip=FALSE AND JS.applied=FALSE) OR JS.id IS NULL) "
+            "AND JOB.end_date >= DATE('now', 'localtime') ")
+    condition2 = ""
+    if near_end_date:
+        logger.info("Get new end_date jobs")
+        condition2 = "(JULIANDAY(JOB.end_date) - JULIANDAY('now', 'localtime')) < 1.2 "
+    else:
+        logger.info("Get active jobs")
     async with database_connection() as db:
         # Convert the rows to list[namedtuple] instead of list[tuple]
         db.row_factory = job_short_detail_factory
         return await db.execute_fetchall(
-            "SELECT id, title, end_date FROM jobs "
-            "WHERE skip=FALSE AND applied=FALSE "
-            "AND end_date >= DATE('now', 'localtime');"
+            stmt + condition2 + " ORDER BY JOB.posted_date DESC;"
         )
 
 
-async def fetch_near_deadline_jobs() -> list[JobDetailShort]:
-    logger.info("Get jobs that are near end date")
+async def update_job_status_field(
+    student_id: int, job_id: int, field: str, value: str | bool
+) -> None:
     async with database_connection() as db:
-        return await db.execute_fetchall(
-            "SELECT id, title, end_date FROM jobs "
-            "WHERE skip=FALSE AND applied=FALSE AND "
-            "end_date >= DATE('now', 'localtime') AND "
-            "(JULIANDAY(end_date) - JULIANDAY('now', 'localtime')) < 2"
-        )
-
-
-async def update_field_to_true(_id: int, field: str) -> None:
-    logger.info("Update field - %s for id - %d", field, _id)
-    async with database_connection() as db:
-        await db.execute(f"UPDATE jobs SET {field}=TRUE WHERE id={_id};")
+        if await job_status_exists(student_id, job_id):
+            logger.info("Update job_status field-%s=>%s by %d for job-%d",
+                        field, value, student_id, job_id)
+            await db.execute(
+                f"UPDATE job_status SET {field}={value} "
+                f"WHERE student_id={student_id} AND job_id={job_id};"
+            )
+        else:
+            logger.info("Insert job_status field-%s=>%s by %d for job-%d",
+                        field, value, student_id, job_id)
+            await db.execute(
+                f"INSERT INTO job_status(student_id, job_id, {field}) VALUES "
+                f"({student_id}, {job_id}, {value})"
+            )
         if field == "applied":
             await db.execute(
-                "UPDATE jobs SET applied_on=DATETIME('now', 'localtime') "
-                f"WHERE id={_id};"
+                "UPDATE job_status SET applied_on=DATETIME('now', 'localtime') "
+                f"WHERE student_id={student_id} AND job_id={job_id};"
             )
         try:
             await db.commit()
         except aiosqlite.Error:
-            logger.exception("Error while updating field - %s for id - %d",
-                             field, _id)
+            logger.exception("Error while updating field-%s=>%s by %d for job-%d",
+                             field, value, student_id, job_id)
 
 
-async def job_exists(title: str, end_date: str, posted_date: str) -> bool:
+async def job_exists(uid: str) -> bool:
     async with database_connection() as db:
         result = await db.execute(
-            f"SELECT EXISTS(SELECT 1 FROM jobs WHERE title='{title}' AND "
-            f"end_date='{end_date}' AND posted_date='{posted_date}' LIMIT 1);"
+            f"SELECT EXISTS(SELECT 1 FROM job WHERE uid='{uid}' LIMIT 1);"
+        )
+        return (await result.fetchone())[0] == 1
+
+
+async def job_status_exists(student_id: int, job_id: int) -> bool:
+    async with database_connection() as db:
+        result = await db.execute(
+            "SELECT EXISTS(SELECT 1 FROM job_status "
+            f"WHERE student_id={student_id} AND job_id={job_id} LIMIT 1);"
         )
         return (await result.fetchone())[0] == 1
 
