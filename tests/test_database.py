@@ -99,10 +99,79 @@ class JobTableTestCase(DefaultTestCase):
 
 
 class StudentTableTestCase(DefaultTestCase):
+    CHAT_ID, USERNAME, FULL_NAME = "23234", "username", "full_name"
+
     async def test_student_table_contains_equal_fields(self):
-        fields = {"id", "chat_id", "username", "full_name", "notify", "created_at"}
+        fields = {"id", "chat_id", "username", "full_name", "notify", "created_at",
+                  "register", "last_active"}
         self.assertSetEqual(fields, set(await list_of_table_columns('student')),
                             "Set of fields do not match for student table")
+
+    async def test_insert_student_returns_correct_value(self):
+        result = await db.insert_student(self.CHAT_ID, self.USERNAME, self.FULL_NAME)
+        self.assertIsInstance(result, db.StudentDetail)
+        self.assertEqual(result.id, 1)
+        self.assertEqual(result.chat_id, self.CHAT_ID)
+        self.assertEqual(result.username, self.USERNAME)
+        self.assertEqual(result.full_name, self.FULL_NAME)
+
+    async def test_default_values_of_new_entries(self):
+        result = await db.insert_student(self.CHAT_ID, self.USERNAME, self.FULL_NAME)
+        async with db.database_connection() as con:
+            result = await con.execute(f"SELECT notify, register FROM student WHERE id={result.id}")
+            notify, register = await result.fetchone()
+            self.assertFalse(notify, "Student notify field is not False by default")
+            self.assertFalse(register, "Student register field is not False by default")
+
+    async def test_chat_id_field_is_unique_and_raises_error(self):
+        await db.insert_student(self.CHAT_ID, "username1", "full_name1")
+        with self.assertRaises(sqlite3.IntegrityError):
+            await db.insert_student(self.CHAT_ID, "username2", "full_name2")
+
+    async def test_username_field_is_unique_and_raises_error(self):
+        await db.insert_student("1234", self.USERNAME, "full_name1")
+        with self.assertRaises(sqlite3.IntegrityError):
+            await db.insert_student("4567", self.USERNAME, "full_name2")
+
+    async def test_check_student_exists_returns_true_if_exists(self):
+        self.assertFalse(await db.student_exists(self.CHAT_ID), "Expected False got True")
+        await db.insert_student(self.CHAT_ID, self.USERNAME, self.FULL_NAME)
+        self.assertTrue(await db.student_exists(self.CHAT_ID), "Expected True got False")
+
+    async def test_update_student_field_updates_field(self):
+        await db.insert_student(self.CHAT_ID, self.USERNAME, self.FULL_NAME)
+        await db.update_student_field(self.CHAT_ID, "notify", True)
+        async with db.database_connection() as con:
+            result = await con.execute(f"SELECT notify FROM student WHERE chat_id='{self.CHAT_ID}';")
+            self.assertTrue((await result.fetchone())[0])
+        await db.update_student_field(self.CHAT_ID, "notify", False)
+        async with db.database_connection() as con:
+            result = await con.execute(f"SELECT notify FROM student WHERE chat_id='{self.CHAT_ID}';")
+            self.assertFalse((await result.fetchone())[0])
+        await db.update_student_field(self.CHAT_ID, "register", True)
+        async with db.database_connection() as con:
+            result = await con.execute(f"SELECT register FROM student WHERE chat_id='{self.CHAT_ID}';")
+            self.assertTrue((await result.fetchone())[0])
+        await db.update_student_field(self.CHAT_ID, "register", False)
+        async with db.database_connection() as con:
+            result = await con.execute(f"SELECT register FROM student WHERE chat_id='{self.CHAT_ID}';")
+            self.assertFalse((await result.fetchone())[0])
+
+    async def test_student_is_notified_returns_true_if_marked_true(self):
+        await db.insert_student(self.CHAT_ID, self.USERNAME, self.FULL_NAME)
+        self.assertFalse(await db.student_is_notified(self.CHAT_ID),
+                         "notify should be False but marked as True")
+        await db.update_student_field(self.CHAT_ID, "notify", True)
+        self.assertTrue(await db.student_is_notified(self.CHAT_ID),
+                        "notify should be True but marked as False")
+
+    async def test_student_is_registered_returns_true_if_marked_true(self):
+        await db.insert_student(self.CHAT_ID, self.USERNAME, self.FULL_NAME)
+        self.assertFalse(await db.student_is_registered(self.CHAT_ID),
+                         "Expected False got True")
+        await db.update_student_field(self.CHAT_ID, "register", True)
+        self.assertTrue(await db.student_is_registered(self.CHAT_ID),
+                        "Expected True got False")
 
 
 class JobStatusTableTestCase(DefaultTestCase):

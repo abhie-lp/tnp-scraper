@@ -14,6 +14,7 @@ DB_NAME = os.environ["DB_NAME"]
 JobDetailShort = namedtuple("JobDetailShort", ("id", "title"))
 JobDetailFull = namedtuple("JobDetailFull", ("id", "title", "end_date", "posted_date",
                                              "interested", "applied", "skip"))
+StudentDetail = namedtuple("StudentDetail", ("id", "chat_id", "username", "full_name"))
 
 
 def database_connection() -> aiosqlite.Connection:
@@ -53,6 +54,19 @@ async def insert_job(title: str, uid: str, end_date: str, posted_date: str) -> J
             logger.exception("Something went wrong while inserting")
 
 
+async def insert_student(chat_id: str | int, username: str, full_name: str) -> StudentDetail:
+    async with database_connection() as db:
+        result: tuple[int] = await db.execute_insert(
+            "INSERT INTO student(chat_id, username, full_name) VALUES "
+            f"('{chat_id}', '{username}', '{full_name}')"
+        )
+        try:
+            await db.commit()
+            return StudentDetail(result[0], chat_id, username, full_name)
+        except aiosqlite.Error:
+            logger.exception("Something went wrong while inserting")
+
+
 async def fetch_one(student_id: int, job_id: int) -> JobDetailFull:
     logger.info("Get details for id-%d", job_id)
     async with database_connection() as db:
@@ -77,19 +91,19 @@ async def fetch_all_jobs(
     student_id: int, only_interested=False, only_applied=False, only_skip=False
 ) -> list[JobDetailShort]:
     stmt = ("SELECT JOB.id, JOB.title FROM job JOB "
-            "JOIN job_status JS ON JS.job_id = JOB.id "
-            f" WHERE JS.student_id={student_id} ")
-    condition2 = ""
+            "LEFT JOIN job_status JS ON JS.job_id = JOB.id "
+            f"AND JS.student_id={student_id} "
+            f"WHERE 1=1 ")
     if only_interested:
         logger.info("Get all interested jobs for %d", student_id)
-        condition2 = " AND JS.interested=TRUE"
+        stmt += " AND JS.interested=TRUE"
     elif only_applied:
         logger.info("Get all applied jobs for %d", student_id)
-        condition2 = " AND JS.applied=TRUE"
+        stmt += " AND JS.applied=TRUE"
     elif only_skip:
         logger.info("Get all skipped jobs for %d", student_id)
-        condition2 = " AND JS.skip=TRUE"
-    stmt = stmt + condition2 + " ORDER BY JOB.posted_date DESC LIMIT 20;"
+        stmt += " AND JS.skip=TRUE"
+    stmt += " ORDER BY JOB.posted_date DESC LIMIT 20;"
     async with database_connection() as db:
         db.row_factory = job_short_detail_factory
         return await db.execute_fetchall(stmt)
@@ -147,12 +161,51 @@ async def update_job_status_field(
                              field, value, student_id, job_id)
 
 
+async def update_student_field(chat_id: str | int, field: str, value: bool) -> None:
+    async with database_connection() as db:
+        await db.execute(f"UPDATE student SET {field}={int(value)} "
+                         f"WHERE chat_id='{chat_id}';")
+        try:
+            await db.commit()
+        except aiosqlite.Error:
+            logger.exception("Error while updating field-notify for chat_id=%s to %s",
+                             chat_id, value)
+
+
 async def job_exists(uid: str) -> bool:
     async with database_connection() as db:
         result = await db.execute(
             f"SELECT EXISTS(SELECT 1 FROM job WHERE uid='{uid}' LIMIT 1);"
         )
         return (await result.fetchone())[0] == 1
+
+
+async def student_exists(chat_id: str | int) -> bool:
+    async with database_connection() as db:
+        result = await db.execute(
+            f"SELECT EXISTS(SELECT 1 FROM student WHERE chat_id='{chat_id}')"
+        )
+        return (await result.fetchone())[0] == 1
+
+
+async def student_is_notified(chat_id: str | int) -> bool:
+    async with database_connection() as db:
+        result: aiosqlite.Cursor = await db.execute(
+            f"SELECT notify FROM student WHERE chat_id='{chat_id}' LIMIT 1;"
+        )
+        if status := await result.fetchone():
+            return status[0] == 1
+        return False
+
+
+async def student_is_registered(chat_id: str | int) -> bool:
+    async with database_connection() as db:
+        result: aiosqlite.Cursor = await db.execute(
+            f"SELECT register FROM student WHERE chat_id='{chat_id}' LIMIT 1;"
+        )
+        if status := await result.fetchone():
+            return status[0] == 1
+        return False
 
 
 async def job_status_exists(student_id: int, job_id: int) -> bool:

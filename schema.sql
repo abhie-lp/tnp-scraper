@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS student(
   username VARCHAR(255) UNIQUE NOT NULL,
   full_name VARCHAR(255),
   notify BOOLEAN DEFAULT FALSE,
+  register BOOLEAN DEFAULT FALSE,   -- Flag for bot and user to interact
+  last_active DATETIME,         -- Store last interaction time with bot
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
