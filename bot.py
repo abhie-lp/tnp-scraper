@@ -82,7 +82,7 @@ async def task_notify_active_jobs(ctx: ContextTypes.DEFAULT_TYPE):
         if jobs_layout := jobs_inline_layout(await db.fetch_active_jobs(student.id)):
             logger.info("Send active jobs notification")
             await ctx.bot.send_message(
-                student.id, "Active jobs that are not applied.",
+                student.chat_id, "Active jobs that are not applied.",
                 reply_markup=InlineKeyboardMarkup(jobs_layout)
             )
 
