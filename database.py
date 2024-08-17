@@ -67,16 +67,18 @@ async def insert_student(chat_id: str | int, username: str, full_name: str) -> S
             logger.exception("Something went wrong while inserting")
 
 
-async def fetch_one(student_id: int, job_id: int) -> JobDetailFull:
+async def fetch_one_job(chat_id: int, job_id: int) -> JobDetailFull:
     logger.info("Get details for id-%d", job_id)
+    student = await fetch_one_student(chat_id)
     async with database_connection() as db:
         db.row_factory = job_full_detail_factory
-        if await job_status_exists(student_id, job_id):
+        if await job_status_exists(student.id, job_id):
             async with db.execute(
                 "SELECT JOB.id, JOB.title, JOB.end_date, JOB.posted_date, "
                 "JS.interested, JS.applied, JS.skip "
-                f"FROM job JOIN job_status JS ON JS.job_id={job_id} "
-                f"WHERE JS.student_id={student_id};"
+                f"FROM job JOB "
+                f"JOIN job_status JS ON JS.job_id=JOB.id "
+                f"WHERE JS.job_id={job_id} AND JS.student_id={student.id};"
             ) as cursor:
                 return await cursor.fetchone()
         else:
@@ -85,6 +87,17 @@ async def fetch_one(student_id: int, job_id: int) -> JobDetailFull:
                 f"WHERE id={job_id}"
             ) as cursor:
                 return await cursor.fetchone()
+
+
+async def fetch_one_student(chat_id: int | str) -> StudentDetail:
+    logger.info("Get details of student-%s", chat_id)
+    async with database_connection() as db:
+        db.row_factory = lambda _, row: StudentDetail(*row)
+        async with db.execute(
+            "SELECT id, chat_id, username, full_name FROM student "
+            f"WHERE chat_id={chat_id}"
+        ) as cursor:
+            return await cursor.fetchone()
 
 
 async def fetch_all_jobs(
@@ -132,33 +145,34 @@ async def fetch_active_jobs(
 
 
 async def update_job_status_field(
-    student_id: int, job_id: int, field: str, value: str | bool
+    chat_id: int, job_id: int, field: str, value: str | bool
 ) -> None:
+    student = await fetch_one_student(chat_id)
     async with database_connection() as db:
-        if await job_status_exists(student_id, job_id):
+        if await job_status_exists(student.id, job_id):
             logger.info("Update job_status field-%s=>%s by %d for job-%d",
-                        field, value, student_id, job_id)
+                        field, value, chat_id, job_id)
             await db.execute(
                 f"UPDATE job_status SET {field}={value} "
-                f"WHERE student_id={student_id} AND job_id={job_id};"
+                f"WHERE student_id={student.id} AND job_id={job_id};"
             )
         else:
             logger.info("Insert job_status field-%s=>%s by %d for job-%d",
-                        field, value, student_id, job_id)
+                        field, value, chat_id, job_id)
             await db.execute(
                 f"INSERT INTO job_status(student_id, job_id, {field}) VALUES "
-                f"({student_id}, {job_id}, {value})"
+                f"({student.id}, {job_id}, {value})"
             )
         if field == "applied":
             await db.execute(
                 "UPDATE job_status SET applied_on=DATETIME('now', 'localtime') "
-                f"WHERE student_id={student_id} AND job_id={job_id};"
+                f"WHERE student_id={student.id} AND job_id={job_id};"
             )
         try:
             await db.commit()
         except aiosqlite.Error:
             logger.exception("Error while updating field-%s=>%s by %d for job-%d",
-                             field, value, student_id, job_id)
+                             field, value, chat_id, job_id)
 
 
 async def update_student_field(chat_id: str | int, field: str, value: bool) -> None:
