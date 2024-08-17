@@ -1,15 +1,11 @@
 import asyncio
-import os
 import sqlite3
 import aiosqlite
 
 from collections import namedtuple
-from dotenv import load_dotenv
 
 from logger import logger
-load_dotenv()
-
-DB_NAME = os.environ["DB_NAME"]
+from constants import DB_NAME
 
 JobDetailShort = namedtuple("JobDetailShort", ("id", "title"))
 JobDetailFull = namedtuple("JobDetailFull", ("id", "title", "end_date", "posted_date",

@@ -4,15 +4,11 @@ import os
 
 from collections import namedtuple
 
-from dotenv import load_dotenv
 from lxml import html
 from typing import Generator
 
 from database import job_exists, insert_job, JobDetailFull
 from logger import logger
-
-load_dotenv()
-
 
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -23,11 +19,10 @@ LOGIN_GET_URL, LOGIN_POST_URL, LOGOUT_URL = (
     f"{BASE_URL}/login.html", f"{BASE_URL}/auth/login.html",
     f"{BASE_URL}/logout.html"
 )
-INDEX_URL, JOBS_URL = f"{BASE_URL}/index.html", f"{BASE_URL}/applyjobs.html"
+JOBS_URL = f"{BASE_URL}/applyjobs.html"
 PAYLOAD = {"identity": os.environ["USERNAME"],
            "password": os.environ["PASSWORD"],
            "submit": "Login", "txtcentrenm": ""}
-CHAT_ID, API_KEY = os.environ["CHAT_ID"], os.environ["TOKEN"]
 
 Job = namedtuple("Job", ("title", "uid", "end_date", "posted_date"))
 
