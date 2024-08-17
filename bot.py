@@ -78,12 +78,13 @@ def jobs_inline_layout(jobs: list) -> list[tuple[InlineKeyboardButton]]:
 
 async def task_notify_active_jobs(ctx: ContextTypes.DEFAULT_TYPE):
     logger.info("Scheduled task to get new data")
-    if jobs_layout := jobs_inline_layout(await db.fetch_active_jobs()):
-        logger.info("Send notification")
-        await ctx.bot.send_message(
-            MY_CHAT_ID, "Active jobs that are not applied.",
-            reply_markup=InlineKeyboardMarkup(jobs_layout)
-        )
+    for student in await db.students_to_notify():
+        if jobs_layout := jobs_inline_layout(await db.fetch_active_jobs(student.id)):
+            logger.info("Send active jobs notification")
+            await ctx.bot.send_message(
+                student.id, "Active jobs that are not applied.",
+                reply_markup=InlineKeyboardMarkup(jobs_layout)
+            )
 
 
 async def task_get_latest_data(ctx: ContextTypes.DEFAULT_TYPE):
@@ -106,13 +107,24 @@ async def task_get_latest_data(ctx: ContextTypes.DEFAULT_TYPE):
 
 async def task_near_end_date_jobs(ctx: ContextTypes.DEFAULT_TYPE):
     logger.info("Run task to get jobs reaching end_date")
-    if target_jobs := await db.fetch_active_jobs():
-        await ctx.bot.send_message(
-            MY_CHAT_ID, "Take action on below pending jobs reaching end_date.",
-            reply_markup=InlineKeyboardMarkup(jobs_inline_layout(target_jobs))
-        )
-    elif ctx.job.data == "force":
-        await ctx.bot.send_message(MY_CHAT_ID, "There are not jobs nearing to end_date.")
+    if ctx.job.data == "force":
+        student = await db.fetch_one_student(ctx.job.chat_id)
+        if target_jobs := await db.fetch_active_jobs(student.id, True):
+            await ctx.bot.send_message(
+                student.chat_id, "Take action on below pending jobs reaching end_date.",
+                reply_markup=InlineKeyboardMarkup(jobs_inline_layout(target_jobs))
+            )
+        else:
+            await ctx.bot.send_message(student.chat_id,
+                                       "There are not jobs nearing to end_date.")
+    else:
+        for student in await db.students_to_notify():
+            if target_jobs := await db.fetch_active_jobs(student.id, True):
+                await ctx.bot.send_message(
+                    student.chat_id,
+                    "Take action on below pending jobs reaching end_date.",
+                    reply_markup=InlineKeyboardMarkup(jobs_inline_layout(target_jobs))
+                )
 
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -231,7 +243,9 @@ async def handler_get_latest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 @is_registered
 async def handler_get_near_end_date_jobs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.job_queue.run_once(task_near_end_date_jobs, .2, data="force")
+    logger.info("Get near end jobs %s", update.effective_user.id)
+    ctx.job_queue.run_once(task_near_end_date_jobs, .2, data="force",
+                           chat_id=update.effective_user.id)
 
 
 async def handler_register(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -281,10 +295,10 @@ async def handler_unregister(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 def main():
     application = Application.builder().token(os.environ["TOKEN"]).concurrent_updates(True).build()
-    # application.job_queue.run_repeating(task_notify_active_jobs, 200, first=1)
-    # application.job_queue.run_repeating(task_get_latest_data, 4 * 60 * 60, first=1)
-    application.job_queue.run_daily(task_near_end_date_jobs, dt.time(12, 40))
-    application.job_queue.run_daily(task_near_end_date_jobs, dt.time(22))
+    application.job_queue.run_repeating(task_notify_active_jobs, 200, first=1)
+    application.job_queue.run_repeating(task_get_latest_data, 4 * 60 * 60, first=1)
+    application.job_queue.run_daily(task_near_end_date_jobs, dt.time(8, 0))
+    application.job_queue.run_daily(task_near_end_date_jobs, dt.time(19, 0))
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("active", handler_active_jobs))

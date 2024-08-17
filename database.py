@@ -126,17 +126,16 @@ async def fetch_active_jobs(
             f"(JS.job_id = JOB.id AND JS.student_id={student_id}) "
             "WHERE ((JS.skip=FALSE AND JS.applied=FALSE) OR JS.id IS NULL) "
             "AND JOB.end_date >= DATE('now', 'localtime') ")
-    condition2 = ""
     if near_end_date:
-        logger.info("Get new end_date jobs")
-        condition2 = "(JULIANDAY(JOB.end_date) - JULIANDAY('now', 'localtime')) < 1.2 "
+        logger.info("Get end_date jobs")
+        stmt += "AND (JULIANDAY(JOB.end_date) - JULIANDAY('now', 'localtime')) < 1.2 "
     else:
         logger.info("Get active jobs")
     async with database_connection() as db:
         # Convert the rows to list[namedtuple] instead of list[tuple]
         db.row_factory = job_short_detail_factory
         return await db.execute_fetchall(
-            stmt + condition2 + " ORDER BY JOB.posted_date DESC;"
+            stmt + " ORDER BY JOB.posted_date DESC;"
         )
 
 
@@ -216,6 +215,15 @@ async def student_is_registered(chat_id: str | int) -> bool:
         if status := await result.fetchone():
             return status[0] == 1
         return False
+
+
+async def students_to_notify() -> list[StudentDetail]:
+    async with database_connection() as db:
+        db.row_factory = lambda _, row: StudentDetail(*row)
+        return await db.execute_fetchall(
+            "SELECT id, chat_id, username, full_name FROM student "
+            "WHERE register=TRUE AND notify=TRUE"
+        )
 
 
 async def job_status_exists(student_id: int, job_id: int) -> bool:
