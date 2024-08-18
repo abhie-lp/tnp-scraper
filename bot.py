@@ -295,7 +295,7 @@ async def handler_unregister(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 def main():
     application = Application.builder().token(os.environ["TOKEN"]).concurrent_updates(True).build()
-    application.job_queue.run_repeating(task_notify_active_jobs, 200, first=1)
+    application.job_queue.run_repeating(task_notify_active_jobs, 1800, first=1)
     application.job_queue.run_repeating(task_get_latest_data, 4 * 60 * 60, first=1)
     application.job_queue.run_daily(task_near_end_date_jobs, dt.time(8, 0))
     application.job_queue.run_daily(task_near_end_date_jobs, dt.time(19, 0))
